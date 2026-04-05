@@ -14,6 +14,8 @@ import { randomUUID } from 'crypto';
 
 // === Types ===
 
+export type MessagePriority = 'low' | 'normal' | 'high' | 'urgent';
+
 export interface NotificationMessage {
   id: string;
   channel: string;
@@ -21,6 +23,8 @@ export interface NotificationMessage {
   data: unknown;
   timestamp: string;
   senderId?: string;
+  priority: MessagePriority;
+  ttl?: number;
 }
 
 export interface ClientInfo {
@@ -242,6 +246,7 @@ export class NotificationHub {
       return;
     }
 
+    const priority: MessagePriority = msg.priority || 'normal';
     const notification: NotificationMessage = {
       id: randomUUID(),
       channel: channelName,
@@ -249,10 +254,14 @@ export class NotificationHub {
       data,
       timestamp: new Date().toISOString(),
       senderId: client.info.userId || clientId,
+      priority,
+      ttl: msg.ttl,
     };
 
-    // Buffer the message
-    this.bufferMessage(channelName, notification);
+    // Buffer the message (skip buffering for low-priority expired messages)
+    if (priority !== 'low' || !notification.ttl) {
+      this.bufferMessage(channelName, notification);
+    }
 
     // Broadcast to channel (excluding sender)
     this.broadcastToChannel(channelName, { type: 'message', ...notification }, clientId);
@@ -328,13 +337,14 @@ export class NotificationHub {
     }
   }
 
-  broadcast(event: string, data: unknown): void {
+  broadcast(event: string, data: unknown, priority: MessagePriority = 'normal'): void {
     const notification: NotificationMessage = {
       id: randomUUID(),
       channel: '__broadcast__',
       event,
       data,
       timestamp: new Date().toISOString(),
+      priority,
     };
 
     for (const [, { ws }] of this.clients) {
@@ -344,7 +354,7 @@ export class NotificationHub {
     }
   }
 
-  sendToUser(userId: string, event: string, data: unknown): boolean {
+  sendToUser(userId: string, event: string, data: unknown, priority: MessagePriority = 'normal'): boolean {
     let sent = false;
 
     for (const [, { ws, info }] of this.clients) {
@@ -355,6 +365,7 @@ export class NotificationHub {
           event,
           data,
           timestamp: new Date().toISOString(),
+          priority,
         };
         this.send(ws, { type: 'message', ...notification });
         sent = true;
